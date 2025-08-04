@@ -4,9 +4,14 @@
 (define-constant err-invalid-country (err u102))
 (define-constant err-payment-failed (err u103))
 (define-constant err-invalid-proof (err u104))
+(define-constant err-insufficient-signatures (err u105))
+(define-constant err-already-signed (err u106))
+(define-constant err-not-authorized-verifier (err u107))
 
 (define-data-var min-fee uint u100)
 (define-data-var max-fee uint u10000)
+(define-data-var high-value-threshold uint u50000)
+(define-data-var required-signatures uint u2)
 
 (define-map hs-codes 
     { code: (string-ascii 10) }
@@ -28,6 +33,16 @@
         amount: uint,
         verified: bool
     }
+)
+
+(define-map authorized-verifiers
+    { verifier: principal }
+    { authorized: bool }
+)
+
+(define-map payment-signatures
+    { payment-id: uint, verifier: principal }
+    { signed: bool }
 )
 
 (define-data-var payment-nonce uint u0)
@@ -104,4 +119,90 @@
 
 (define-read-only (get-payment-details (payment-id uint))
     (ok (unwrap! (map-get? duty-payments {payment-id: payment-id}) err-invalid-proof))
+)
+
+(define-public (authorize-verifier (verifier principal))
+    (begin
+        (asserts! (is-eq tx-sender contract-owner) err-owner-only)
+        (ok (map-set authorized-verifiers {verifier: verifier} {authorized: true}))
+    )
+)
+
+(define-public (revoke-verifier (verifier principal))
+    (begin
+        (asserts! (is-eq tx-sender contract-owner) err-owner-only)
+        (ok (map-set authorized-verifiers {verifier: verifier} {authorized: false}))
+    )
+)
+
+(define-public (sign-payment (payment-id uint))
+    (let (
+        (payment (unwrap! (map-get? duty-payments {payment-id: payment-id}) err-invalid-proof))
+        (verifier-auth (unwrap! (map-get? authorized-verifiers {verifier: tx-sender}) err-not-authorized-verifier))
+        (already-signed (map-get? payment-signatures {payment-id: payment-id, verifier: tx-sender}))
+    )
+    (begin
+        (asserts! (get authorized verifier-auth) err-not-authorized-verifier)
+        (asserts! (is-none already-signed) err-already-signed)
+        (asserts! (>= (get amount payment) (var-get high-value-threshold)) (ok true))
+        (ok (map-set payment-signatures {payment-id: payment-id, verifier: tx-sender} {signed: true}))
+    ))
+)
+
+(define-private (count-signatures (payment-id uint))
+    (let (
+        (authorized-list (list 
+            (default-to false (get signed (map-get? payment-signatures {payment-id: payment-id, verifier: contract-owner})))
+        ))
+    )
+    (len (filter is-signature-valid authorized-list)))
+)
+
+(define-private (is-signature-valid (signed bool))
+    signed
+)
+
+(define-public (verify-multisig-payment (payment-id uint))
+    (let (
+        (payment (unwrap! (map-get? duty-payments {payment-id: payment-id}) err-invalid-proof))
+        (signature-count (count-signatures payment-id))
+    )
+    (begin
+        (asserts! (is-eq tx-sender contract-owner) err-owner-only)
+        (if (>= (get amount payment) (var-get high-value-threshold))
+            (begin
+                (asserts! (>= signature-count (var-get required-signatures)) err-insufficient-signatures)
+                (ok (map-set duty-payments 
+                    {payment-id: payment-id}
+                    (merge payment {verified: true})
+                ))
+            )
+            (ok (map-set duty-payments 
+                {payment-id: payment-id}
+                (merge payment {verified: true})
+            ))
+        )
+    ))
+)
+
+(define-public (set-high-value-threshold (threshold uint))
+    (begin
+        (asserts! (is-eq tx-sender contract-owner) err-owner-only)
+        (ok (var-set high-value-threshold threshold))
+    )
+)
+
+(define-public (set-required-signatures (count uint))
+    (begin
+        (asserts! (is-eq tx-sender contract-owner) err-owner-only)
+        (ok (var-set required-signatures count))
+    )
+)
+
+(define-read-only (get-signature-count (payment-id uint))
+    (ok (count-signatures payment-id))
+)
+
+(define-read-only (is-verifier-authorized (verifier principal))
+    (ok (default-to false (get authorized (map-get? authorized-verifiers {verifier: verifier}))))
 )

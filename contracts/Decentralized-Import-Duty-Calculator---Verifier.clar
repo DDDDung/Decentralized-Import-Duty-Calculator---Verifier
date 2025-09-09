@@ -45,6 +45,11 @@
     { signed: bool }
 )
 
+(define-map refund-requests
+    { payment-id: uint }
+    { requested: bool, refund-amount: uint, approved: bool }
+)
+
 (define-data-var payment-nonce uint u0)
 
 (define-read-only (get-duty-rate (hs-code (string-ascii 10)) (origin (string-ascii 2)) (destination (string-ascii 2)))
@@ -205,4 +210,28 @@
 
 (define-read-only (is-verifier-authorized (verifier principal))
     (ok (default-to false (get authorized (map-get? authorized-verifiers {verifier: verifier}))))
+)
+(define-public (request-refund (payment-id uint) (refund-amount uint))
+    (let (
+        (payment (unwrap! (map-get? duty-payments {payment-id: payment-id}) err-invalid-proof))
+    )
+    (begin
+        (asserts! (is-eq tx-sender (get importer payment)) err-owner-only)
+        (asserts! (<= refund-amount (get amount payment)) err-invalid-proof)
+        (ok (map-set refund-requests {payment-id: payment-id} {requested: true, refund-amount: refund-amount, approved: false}))
+    ))
+)
+
+(define-public (approve-refund (payment-id uint))
+    (let (
+        (request (unwrap! (map-get? refund-requests {payment-id: payment-id}) err-invalid-proof))
+    )
+    (begin
+        (asserts! (is-eq tx-sender contract-owner) err-owner-only)
+        (ok (map-set refund-requests {payment-id: payment-id} (merge request {approved: true})))
+    ))
+)
+
+(define-read-only (get-refund-status (payment-id uint))
+    (ok (unwrap! (map-get? refund-requests {payment-id: payment-id}) err-invalid-proof))
 )

@@ -7,11 +7,13 @@
 (define-constant err-insufficient-signatures (err u105))
 (define-constant err-already-signed (err u106))
 (define-constant err-not-authorized-verifier (err u107))
+(define-constant err-paused (err u108))
 
 (define-data-var min-fee uint u100)
 (define-data-var max-fee uint u10000)
 (define-data-var high-value-threshold uint u50000)
 (define-data-var required-signatures uint u2)
+(define-data-var paused bool false)
 
 (define-map hs-codes 
     { code: (string-ascii 10) }
@@ -75,6 +77,7 @@
 
 (define-public (register-hs-code (code (string-ascii 10)) (description (string-ascii 100)) (base-rate uint))
     (begin
+        (asserts! (not (var-get paused)) err-paused)
         (asserts! (is-eq tx-sender contract-owner) err-owner-only)
         (ok (map-set hs-codes {code: code} {description: description, base-rate: base-rate}))
     )
@@ -82,6 +85,7 @@
 
 (define-public (register-country-rate (country (string-ascii 2)) (hs-code (string-ascii 10)) (rate uint))
     (begin
+        (asserts! (not (var-get paused)) err-paused)
         (asserts! (is-eq tx-sender contract-owner) err-owner-only)
         (ok (map-set country-rates {country: country, hs-code: hs-code} {rate: rate}))
     )
@@ -93,8 +97,9 @@
         (payment-id (+ (var-get payment-nonce) u1))
     )
     (begin
+        (asserts! (not (var-get paused)) err-paused)
         (var-set payment-nonce payment-id)
-        (map-set duty-payments 
+        (map-set duty-payments
             {payment-id: payment-id}
             {
                 importer: tx-sender,
@@ -114,8 +119,9 @@
         (payment (unwrap! (map-get? duty-payments {payment-id: payment-id}) err-invalid-proof))
     )
     (begin
+        (asserts! (not (var-get paused)) err-paused)
         (asserts! (is-eq tx-sender contract-owner) err-owner-only)
-        (ok (map-set duty-payments 
+        (ok (map-set duty-payments
             {payment-id: payment-id}
             (merge payment {verified: true})
         ))
@@ -128,6 +134,7 @@
 
 (define-public (authorize-verifier (verifier principal))
     (begin
+        (asserts! (not (var-get paused)) err-paused)
         (asserts! (is-eq tx-sender contract-owner) err-owner-only)
         (ok (map-set authorized-verifiers {verifier: verifier} {authorized: true}))
     )
@@ -135,6 +142,7 @@
 
 (define-public (revoke-verifier (verifier principal))
     (begin
+        (asserts! (not (var-get paused)) err-paused)
         (asserts! (is-eq tx-sender contract-owner) err-owner-only)
         (ok (map-set authorized-verifiers {verifier: verifier} {authorized: false}))
     )
@@ -147,6 +155,7 @@
         (already-signed (map-get? payment-signatures {payment-id: payment-id, verifier: tx-sender}))
     )
     (begin
+        (asserts! (not (var-get paused)) err-paused)
         (asserts! (get authorized verifier-auth) err-not-authorized-verifier)
         (asserts! (is-none already-signed) err-already-signed)
         (asserts! (>= (get amount payment) (var-get high-value-threshold)) (ok true))
@@ -173,16 +182,17 @@
         (signature-count (count-signatures payment-id))
     )
     (begin
+        (asserts! (not (var-get paused)) err-paused)
         (asserts! (is-eq tx-sender contract-owner) err-owner-only)
         (if (>= (get amount payment) (var-get high-value-threshold))
             (begin
                 (asserts! (>= signature-count (var-get required-signatures)) err-insufficient-signatures)
-                (ok (map-set duty-payments 
+                (ok (map-set duty-payments
                     {payment-id: payment-id}
                     (merge payment {verified: true})
                 ))
             )
-            (ok (map-set duty-payments 
+            (ok (map-set duty-payments
                 {payment-id: payment-id}
                 (merge payment {verified: true})
             ))
@@ -192,6 +202,7 @@
 
 (define-public (set-high-value-threshold (threshold uint))
     (begin
+        (asserts! (not (var-get paused)) err-paused)
         (asserts! (is-eq tx-sender contract-owner) err-owner-only)
         (ok (var-set high-value-threshold threshold))
     )
@@ -199,6 +210,7 @@
 
 (define-public (set-required-signatures (count uint))
     (begin
+        (asserts! (not (var-get paused)) err-paused)
         (asserts! (is-eq tx-sender contract-owner) err-owner-only)
         (ok (var-set required-signatures count))
     )
@@ -216,6 +228,7 @@
         (payment (unwrap! (map-get? duty-payments {payment-id: payment-id}) err-invalid-proof))
     )
     (begin
+        (asserts! (not (var-get paused)) err-paused)
         (asserts! (is-eq tx-sender (get importer payment)) err-owner-only)
         (asserts! (<= refund-amount (get amount payment)) err-invalid-proof)
         (ok (map-set refund-requests {payment-id: payment-id} {requested: true, refund-amount: refund-amount, approved: false}))
@@ -227,6 +240,7 @@
         (request (unwrap! (map-get? refund-requests {payment-id: payment-id}) err-invalid-proof))
     )
     (begin
+        (asserts! (not (var-get paused)) err-paused)
         (asserts! (is-eq tx-sender contract-owner) err-owner-only)
         (ok (map-set refund-requests {payment-id: payment-id} (merge request {approved: true})))
     ))
@@ -234,4 +248,18 @@
 
 (define-read-only (get-refund-status (payment-id uint))
     (ok (unwrap! (map-get? refund-requests {payment-id: payment-id}) err-invalid-proof))
+)
+
+(define-public (pause-contract)
+    (begin
+        (asserts! (is-eq tx-sender contract-owner) err-owner-only)
+        (ok (var-set paused true))
+    )
+)
+
+(define-public (unpause-contract)
+    (begin
+        (asserts! (is-eq tx-sender contract-owner) err-owner-only)
+        (ok (var-set paused false))
+    )
 )

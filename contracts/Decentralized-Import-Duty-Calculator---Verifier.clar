@@ -52,6 +52,11 @@
     { requested: bool, refund-amount: uint, approved: bool }
 )
 
+(define-map installment-plans
+    { payment-id: uint }
+    { total-amount: uint, installments: uint, paid-installments: uint, installment-amount: uint }
+)
+
 (define-data-var payment-nonce uint u0)
 
 (define-read-only (get-duty-rate (hs-code (string-ascii 10)) (origin (string-ascii 2)) (destination (string-ascii 2)))
@@ -248,6 +253,48 @@
 
 (define-read-only (get-refund-status (payment-id uint))
     (ok (unwrap! (map-get? refund-requests {payment-id: payment-id}) err-invalid-proof))
+)
+
+(define-public (create-installment-plan (payment-id uint) (installments uint))
+    (let (
+        (payment (unwrap! (map-get? duty-payments {payment-id: payment-id}) err-invalid-proof))
+        (total-amount (get amount payment))
+        (installment-amount (/ total-amount installments))
+    )
+    (begin
+        (asserts! (not (var-get paused)) err-paused)
+        (asserts! (is-eq tx-sender (get importer payment)) err-owner-only)
+        (asserts! (> installments u0) err-invalid-proof)
+        (ok (map-set installment-plans
+            {payment-id: payment-id}
+            {
+                total-amount: total-amount,
+                installments: installments,
+                paid-installments: u0,
+                installment-amount: installment-amount
+            }
+        ))
+    ))
+)
+
+(define-public (pay-installment (payment-id uint))
+    (let (
+        (plan (unwrap! (map-get? installment-plans {payment-id: payment-id}) err-invalid-proof))
+        (paid-installments (get paid-installments plan))
+        (installments (get installments plan))
+    )
+    (begin
+        (asserts! (not (var-get paused)) err-paused)
+        (asserts! (< paid-installments installments) err-invalid-proof)
+        (ok (map-set installment-plans
+            {payment-id: payment-id}
+            (merge plan {paid-installments: (+ paid-installments u1)})
+        ))
+    ))
+)
+
+(define-read-only (get-installment-plan (payment-id uint))
+    (ok (unwrap! (map-get? installment-plans {payment-id: payment-id}) err-invalid-proof))
 )
 
 (define-public (pause-contract)
